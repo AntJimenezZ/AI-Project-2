@@ -210,6 +210,7 @@ def classify_image(image):
 def classify_video(video_path):
     """
     Procesa un video extrayendo 1 frame por segundo y clasificando cada uno con ambos modelos.
+    Utiliza suavizado de predicciones para mayor estabilidad.
     Retorna un análisis con detecciones por modelo y un video con anotaciones.
     
     Args:
@@ -249,6 +250,15 @@ def classify_video(video_path):
         frame_count = 0
         processed_frames = 0
         
+        # Variables para suavizado de predicciones
+        last_mobilenet_class = None
+        last_mobilenet_conf = 0
+        last_resnet_class = None
+        last_resnet_conf = 0
+        frames_since_update_mb = 0
+        frames_since_update_rn = 0
+        max_frames_display = fps * 2  # Mostrar predicción durante 2 segundos
+        
         # Procesar frames
         while True:
             ret, frame = cap.read()
@@ -270,62 +280,97 @@ def classify_video(video_path):
                     img_array = preprocess_image(pil_image)
                     
                     # Predicción con MobileNetV2
-                    mobilenet_class = None
-                    mobilenet_conf = 0
                     if model_mobilenet is not None:
                         pred = model_mobilenet.predict(img_array, verbose=0)
                         pred_class = np.argmax(pred[0])
                         confidence = float(pred[0][pred_class]) * 100
                         mobilenet_class = CLASS_NAMES[pred_class]
-                        mobilenet_conf = confidence
                         
-                        detections_mobilenet.append({
-                            "frame": processed_frames,
-                            "segundo": frame_count / fps,
-                            "clase": mobilenet_class,
-                            "confianza": f"{confidence:.2f}%"
-                        })
+                        # Solo actualizar si la confianza es suficientemente alta (>50%)
+                        if confidence > 50:
+                            last_mobilenet_class = mobilenet_class
+                            last_mobilenet_conf = confidence
+                            frames_since_update_mb = 0
+                            
+                            detections_mobilenet.append({
+                                "frame": processed_frames,
+                                "segundo": frame_count / fps,
+                                "clase": mobilenet_class,
+                                "confianza": f"{confidence:.2f}%"
+                            })
                     
                     # Predicción con ResNet50
-                    resnet_class = None
-                    resnet_conf = 0
                     if model_resnet is not None:
                         pred = model_resnet.predict(img_array, verbose=0)
                         pred_class = np.argmax(pred[0])
                         confidence = float(pred[0][pred_class]) * 100
                         resnet_class = CLASS_NAMES[pred_class]
-                        resnet_conf = confidence
                         
-                        detections_resnet.append({
-                            "frame": processed_frames,
-                            "segundo": frame_count / fps,
-                            "clase": resnet_class,
-                            "confianza": f"{confidence:.2f}%"
-                        })
-                    
-                    # Anotaciones en el video (mostrar ambos modelos)
-                    y_offset = 40
-                    
-                    if model_mobilenet is not None and mobilenet_class:
-                        color_mb = (0, 255, 0) if mobilenet_class == "Gato" else (255, 0, 0)
-                        label_mb = f"MobileNet: {mobilenet_class} ({mobilenet_conf:.1f}%)"
-                        cv2.putText(frame, label_mb, (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 
-                                  0.8, color_mb, 2, cv2.LINE_AA)
-                        y_offset += 35
-                    
-                    if model_resnet is not None and resnet_class:
-                        color_rn = (0, 255, 0) if resnet_class == "Gato" else (255, 0, 0)
-                        label_rn = f"ResNet50: {resnet_class} ({resnet_conf:.1f}%)"
-                        cv2.putText(frame, label_rn, (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 
-                                  0.8, color_rn, 2, cv2.LINE_AA)
-                        y_offset += 35
-                    
-                    # Mostrar tiempo
-                    cv2.putText(frame, f"Tiempo: {frame_count/fps:.1f}s", (20, y_offset), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                        # Solo actualizar si la confianza es suficientemente alta (>50%)
+                        if confidence > 50:
+                            last_resnet_class = resnet_class
+                            last_resnet_conf = confidence
+                            frames_since_update_rn = 0
+                            
+                            detections_resnet.append({
+                                "frame": processed_frames,
+                                "segundo": frame_count / fps,
+                                "clase": resnet_class,
+                                "confianza": f"{confidence:.2f}%"
+                            })
                 
                 except Exception as e:
                     print(f"Error procesando frame {processed_frames}: {e}")
+            
+            # Dibujar predicciones en TODOS los frames (no solo en los procesados)
+            # Esto crea un efecto de "mantener visible" la predicción durante 2 segundos
+            y_offset = 50
+            
+            if last_mobilenet_class and frames_since_update_mb < max_frames_display:
+                color_mb = (0, 255, 0) if last_mobilenet_class == "Gato" else (255, 0, 0)
+                label_mb = f"MobileNetV2: {last_mobilenet_class} ({last_mobilenet_conf:.1f}%)"
+                
+                # Dibujar rectángulo de fondo para mejor legibilidad
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 1.0
+                thickness = 2
+                text_size = cv2.getTextSize(label_mb, font, font_scale, thickness)[0]
+                
+                # Rectángulo de fondo
+                cv2.rectangle(frame, (15, y_offset - text_size[1] - 10), 
+                            (25 + text_size[0], y_offset + 10), color_mb, -1)
+                
+                # Texto blanco
+                cv2.putText(frame, label_mb, (20, y_offset), font, font_scale, 
+                          (255, 255, 255), thickness, cv2.LINE_AA)
+                y_offset += 50
+            
+            if last_resnet_class and frames_since_update_rn < max_frames_display:
+                color_rn = (0, 255, 0) if last_resnet_class == "Gato" else (255, 0, 0)
+                label_rn = f"ResNet50: {last_resnet_class} ({last_resnet_conf:.1f}%)"
+                
+                # Dibujar rectángulo de fondo para mejor legibilidad
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 1.0
+                thickness = 2
+                text_size = cv2.getTextSize(label_rn, font, font_scale, thickness)[0]
+                
+                # Rectángulo de fondo
+                cv2.rectangle(frame, (15, y_offset - text_size[1] - 10), 
+                            (25 + text_size[0], y_offset + 10), color_rn, -1)
+                
+                # Texto blanco
+                cv2.putText(frame, label_rn, (20, y_offset), font, font_scale, 
+                          (255, 255, 255), thickness, cv2.LINE_AA)
+                y_offset += 50
+            
+            # Mostrar tiempo
+            cv2.putText(frame, f"Tiempo: {frame_count/fps:.1f}s", (20, y_offset), 
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            
+            # Incrementar contadores
+            frames_since_update_mb += 1
+            frames_since_update_rn += 1
             
             # Escribir frame en el video de salida
             out.write(frame)
@@ -341,8 +386,13 @@ def classify_video(video_path):
         report += f"   • Duración: {duration:.2f} segundos\n"
         report += f"   • FPS: {fps}\n"
         report += f"   • Total de frames: {total_frames}\n"
-        report += f"   • Frames procesados: {processed_frames}\n"
+        report += f"   • Frames procesados (1 por segundo): {processed_frames}\n"
         report += f"   • Resolución: {frame_width}x{frame_height}\n\n"
+        
+        report += f"⚙️ Configuración de procesamiento:\n"
+        report += f"   • Umbral de confianza mínima: 50%\n"
+        report += f"   • Duración de visualización: 2 segundos por detección\n"
+        report += f"   • Suavizado: Activado\n\n"
         
         # Análisis MobileNetV2
         if detections_mobilenet:
@@ -352,11 +402,17 @@ def classify_video(video_path):
             gatos_mb = sum(1 for d in detections_mobilenet if d["clase"] == "Gato")
             perros_mb = sum(1 for d in detections_mobilenet if d["clase"] == "Perro")
             report += f"   • Gatos detectados: {gatos_mb}\n"
-            report += f"   • Perros detectados: {perros_mb}\n\n"
+            report += f"   • Perros detectados: {perros_mb}\n"
+            report += f"   • Total detecciones: {len(detections_mobilenet)}\n\n"
             report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
             report += f"{'-'*50}\n"
             for det in detections_mobilenet:
                 report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
+        else:
+            report += f"{'='*70}\n"
+            report += f"🤖 RESULTADOS - MobileNetV2\n"
+            report += f"{'='*70}\n"
+            report += f"   ⚠️ No se realizaron detecciones con confianza > 50%\n\n"
         
         # Análisis ResNet50
         if detections_resnet:
@@ -366,11 +422,17 @@ def classify_video(video_path):
             gatos_rn = sum(1 for d in detections_resnet if d["clase"] == "Gato")
             perros_rn = sum(1 for d in detections_resnet if d["clase"] == "Perro")
             report += f"   • Gatos detectados: {gatos_rn}\n"
-            report += f"   • Perros detectados: {perros_rn}\n\n"
+            report += f"   • Perros detectados: {perros_rn}\n"
+            report += f"   • Total detecciones: {len(detections_resnet)}\n\n"
             report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
             report += f"{'-'*50}\n"
             for det in detections_resnet:
                 report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
+        else:
+            report += f"\n{'='*70}\n"
+            report += f"🤖 RESULTADOS - ResNet50\n"
+            report += f"{'='*70}\n"
+            report += f"   ⚠️ No se realizaron detecciones con confianza > 50%\n\n"
         
         report += f"\n{'='*70}\n"
         report += f"✅ Video procesado y guardado con anotaciones\n"
