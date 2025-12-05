@@ -9,6 +9,8 @@ import numpy as np
 import librosa
 from PIL import Image
 import os
+import cv2
+import tempfile
 
 # ============================================
 # CONFIGURACIÓN DE RUTAS
@@ -205,6 +207,136 @@ def classify_image(image):
         return f"Error al procesar la imagen: {str(e)}", None, None
 
 
+def classify_video(video_path):
+    """
+    Procesa un video extrayendo 1 frame por segundo y clasificando cada uno.
+    Retorna un análisis con detecciones por modelo y un video con anotaciones.
+    
+    Args:
+        video_path: ruta al archivo de video
+    Returns:
+        tupla con (reporte_texto, video_anotado)
+    """
+    if video_path is None:
+        return "Por favor, sube un video", None
+    
+    try:
+        # Abrir el video
+        cap = cv2.VideoCapture(video_path)
+        
+        if not cap.isOpened():
+            return "Error: No se pudo abrir el video", None
+        
+        # Obtener propiedades del video
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        if fps == 0:
+            fps = 30  # valor por defecto
+        
+        duration = total_frames / fps if fps > 0 else 0
+        
+        # Configurar escritor de video de salida
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        temp_output_path = os.path.join(tempfile.gettempdir(), "video_clasificado.mp4")
+        out = cv2.VideoWriter(temp_output_path, fourcc, fps, (frame_width, frame_height))
+        
+        # Variables para análisis
+        detections = []
+        frame_count = 0
+        processed_frames = 0
+        
+        # Procesar frames
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            frame_count += 1
+            
+            # Extraer 1 frame por segundo (cada fps frames)
+            if frame_count % fps == 0 or frame_count == 1:
+                processed_frames += 1
+                
+                # Convertir BGR a RGB para PIL
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(frame_rgb)
+                
+                # Clasificar la imagen
+                try:
+                    img_array = preprocess_image(pil_image)
+                    
+                    # Predicción con MobileNetV2 (más confiable)
+                    if model_mobilenet is not None:
+                        pred = model_mobilenet.predict(img_array, verbose=0)
+                        pred_class = np.argmax(pred[0])
+                        confidence = float(pred[0][pred_class]) * 100
+                        class_name = CLASS_NAMES[pred_class]
+                        
+                        detections.append({
+                            "frame": processed_frames,
+                            "segundo": frame_count / fps,
+                            "clase": class_name,
+                            "confianza": f"{confidence:.2f}%"
+                        })
+                        
+                        # Anotaciones en el video
+                        color = (0, 255, 0) if class_name == "Gato" else (255, 0, 0)  # Verde para gato, azul para perro
+                        label = f"{class_name}: {confidence:.1f}%"
+                        
+                        # Agregar texto al frame
+                        cv2.putText(frame, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 
+                                  1, color, 2, cv2.LINE_AA)
+                        cv2.putText(frame, f"Tiempo: {frame_count/fps:.1f}s", (20, 80), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                
+                except Exception as e:
+                    print(f"Error procesando frame {processed_frames}: {e}")
+            
+            # Escribir frame en el video de salida
+            out.write(frame)
+        
+        # Liberar recursos
+        cap.release()
+        out.release()
+        
+        # Generar reporte
+        report = "📊 ANÁLISIS DE CLASIFICACIÓN DE VIDEO\n"
+        report += f"{'='*50}\n\n"
+        report += f"📹 Información del video:\n"
+        report += f"   • Duración: {duration:.2f} segundos\n"
+        report += f"   • FPS: {fps}\n"
+        report += f"   • Total de frames: {total_frames}\n"
+        report += f"   • Frames procesados: {processed_frames}\n"
+        report += f"   • Resolución: {frame_width}x{frame_height}\n\n"
+        
+        # Contar detecciones
+        gatos = sum(1 for d in detections if d["clase"] == "Gato")
+        perros = sum(1 for d in detections if d["clase"] == "Perro")
+        
+        report += f"🐱 Detecciones:\n"
+        report += f"   • Gatos detectados: {gatos}\n"
+        report += f"   • Perros detectados: {perros}\n\n"
+        
+        report += f"📋 Detalles por frame:\n"
+        report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
+        report += f"{'-'*50}\n"
+        
+        for det in detections:
+            report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
+        
+        report += f"\n{'='*50}\n"
+        report += f"✅ Video procesado y guardado con anotaciones"
+        
+        return report, temp_output_path
+        
+    except Exception as e:
+        return f"Error al procesar el video: {str(e)}", None
+
+
+
 # ============================================
 # FUNCIÓN PARA SPEECH-TO-TEXT (PLACEHOLDER)
 # ============================================
@@ -317,6 +449,60 @@ with gr.Blocks(title="Clasificador y Transcriptor") as app:
                 fn=classify_image,
                 inputs=image_input,
                 outputs=[output_text, resnet_label, mobilenet_label]
+            )
+        
+        # ============================================
+        # PESTAÑA 1.5: CLASIFICACIÓN DE VIDEOS
+        # ============================================
+        with gr.Tab("Clasificación de Videos"):
+            gr.Markdown(
+                """
+                Sube un video para extraer frames y clasificar gatos o perros.
+                Se extrae 1 frame por segundo y se genera un video anotado con los resultados.
+                """
+            )
+            
+            with gr.Row():
+                with gr.Column(scale=1):
+                    video_input = gr.Video(
+                        label="Sube un video",
+                        format="mp4"
+                    )
+                    video_btn = gr.Button("Procesar Video", variant="primary", size="lg")
+                
+                with gr.Column(scale=1):
+                    video_report = gr.Textbox(
+                        label="Análisis del Video",
+                        lines=15,
+                        max_lines=20
+                    )
+            
+            with gr.Row():
+                video_output = gr.Video(
+                    label="Video Clasificado (Con Anotaciones)",
+                    format="mp4"
+                )
+            
+            gr.Markdown(
+                """
+                **Cómo funciona:**
+                1. Sube un archivo de video en formato MP4
+                2. El sistema extrae 1 frame por segundo
+                3. Cada frame se clasifica usando MobileNetV2
+                4. Se genera un video con anotaciones mostrando la clase detectada y confianza
+                5. Se proporciona un análisis detallado de todas las detecciones
+                
+                **Leyenda de colores:**
+                - 🟢 Verde: Gato detectado
+                - 🔵 Azul: Perro detectado
+                """
+            )
+            
+            # Conectar el botón con la función
+            video_btn.click(
+                fn=classify_video,
+                inputs=video_input,
+                outputs=[video_report, video_output]
             )
         
         # ============================================
