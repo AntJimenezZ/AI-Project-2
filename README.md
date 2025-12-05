@@ -135,7 +135,13 @@ Se utilizaron las siguientes métricas:
 
 2. **Reconocimiento de Voz**: El modelo CTC entrena adecuadamente con el dataset disponible pero carece de suficiente información para realizar transcripción precisa. El modelo captura patrones fonéticos pero requiere magnitudes mayores de datos para generalizar a nuevas muestras.
 
-3. **Interfaz Integrada**: Se desarrolló exitosamente una interfaz web interactiva (Gradio) que integra ambos sistemas y permite comparación directa entre arquitecturas de clasificación, facilitando la evaluación práctica de resultados.
+3. **Interfaz Integrada**: Se desarrolló exitosamente una interfaz web interactiva (Gradio) que integra ambos sistemas y permite comparación directa entre arquitecturas de clasificación, facilitando la evaluación práctica de resultados. La interfaz incluye tres funcionalidades principales:
+
+   - **Clasificación de imágenes**: Permite subir imágenes individuales y obtener predicciones de ambos modelos (ResNet50 y MobileNetV2) de forma simultánea.
+   - **Reconocimiento de voz**: Permite subir archivos de audio en español y obtener la transcripción generada por el modelo CTC.
+   - **Clasificación de videos**: Permite subir videos (máximo 2 minutos) para análisis frame-por-frame. Los modelos procesan 1 fotograma por segundo y generan un video anotado con las predicciones superpuestas en tiempo real.
+
+4. **Clasificación de Videos**: La funcionalidad de procesamiento de videos implementa un sistema de suavizado de predicciones mediante buffer de 3 frames con votación por mayoría, lo que reduce el parpadeo de etiquetas y mejora la estabilidad visual. Sin embargo, **los modelos presentan limitaciones significativas en videos con cambios bruscos entre perros y gatos o en tomas muy rápidas**. En estos escenarios, el sistema de buffer puede mantener predicciones incorrectas durante 2-3 segundos después de un cambio de escena, y las transiciones rápidas (menores a 1 segundo) pueden no ser detectadas correctamente. Esta limitación es inherente a la arquitectura de clasificación estática que no fue entrenada específicamente para secuencias temporales de video.
 
 ### Trabajos Futuros
 
@@ -151,7 +157,9 @@ Se utilizaron las siguientes métricas:
 
 6. **Métricas de Confianza**: Implementar intervalos de confianza y medidas de incertidumbre en las predicciones para informar al usuario sobre la fiabilidad de resultados en casos límite.
 
-7. **Evaluación Exhaustiva**: Realizar validación cruzada y pruebas en datasets independientes para confirmar la generalización observada en los resultados actuales.
+7. **Modelos Temporales para Video**: Explorar arquitecturas diseñadas específicamente para secuencias de video (3D CNNs, LSTMs sobre features, Transformers temporales) que puedan capturar la continuidad temporal y manejar mejor las transiciones rápidas entre clases. Esto mejoraría significativamente el desempeño en videos con cambios bruscos o tomas rápidas.
+
+8. **Evaluación Exhaustiva**: Realizar validación cruzada y pruebas en datasets independientes para confirmar la generalización observada en los resultados actuales.
 
 ## Especificaciones Técnicas
 
@@ -162,6 +170,14 @@ Se utilizaron las siguientes métricas:
 | ResNet50    | Clasificación         | CNN profunda residual | ~23.5M     | Entrenado - Resultados ambiguos |
 | MobileNetV2 | Clasificación         | CNN optimizada        | ~3.5M      | Entrenado - Alto desempeño      |
 | CTC-GRU     | Reconocimiento de voz | RNN con CTC loss      | ~0.5M      | Entrenado - Necesita más datos  |
+
+**Nota sobre clasificación de videos**: Los modelos de imagen (ResNet50 y MobileNetV2) se aplican frame-por-frame para procesamiento de video, pero no están optimizados para secuencias temporales. Presentan dificultades en:
+
+- Videos con cambios bruscos entre perros y gatos (transiciones abruptas de escena)
+- Tomas muy rápidas o movimientos veloces de la cámara
+- Secuencias con múltiples animales en rápida sucesión
+
+Para aplicaciones de video en producción, se recomienda entrenar modelos específicos para datos temporales.
 
 ### Requisitos de Software
 
@@ -175,10 +191,13 @@ Se utilizaron las siguientes métricas:
 
 Los modelos entrenados y la interfaz web están disponibles en el repositorio del proyecto bajo la carpeta `models/` con los siguientes archivos:
 
-- `best_model_resnet50.keras`
-- `best_model_mobilenetv2.keras`
-- `best_model.keras` (modelo CTC)
-- `app.py` (interfaz Gradio)
+- `best_model_resnet50.keras` - Modelo de clasificación ResNet50
+- `best_model_mobilenetv2.keras` - Modelo de clasificación MobileNetV2
+- `best_model.keras` - Modelo CTC para reconocimiento de voz
+- `app.py` - Interfaz Gradio con tres módulos:
+  - Clasificación de imágenes individuales
+  - Reconocimiento de voz en español
+  - Clasificación de videos (con limitaciones en cambios bruscos y tomas rápidas)
 
 ## Visualizaciones y Diagramas
 

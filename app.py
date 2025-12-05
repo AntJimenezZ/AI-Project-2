@@ -80,7 +80,7 @@ try:
         speech_model = tf.keras.models.load_model(SPEECH_MODEL_PATH, compile=False)
         print("✓ Modelo de speech-to-text cargado correctamente")
     else:
-        print("⚠️ Modelo de speech-to-text no encontrado en 'models/best_model.keras'")
+        print("ADVERTENCIA: Modelo de speech-to-text no encontrado en 'models/best_model.keras'")
 except Exception as e:
     print(f"✗ Error al cargar modelo de speech-to-text: {e}")
     speech_model = None
@@ -292,7 +292,7 @@ def classify_video(video_path, progress=gr.Progress()):
         if duration > max_duration:
             if cap is not None:
                 cap.release()
-            return f"⚠️ Video demasiado largo ({duration:.1f}s). Por favor, usa un video de máximo {max_duration} segundos.", None
+            return f"ADVERTENCIA: Video demasiado largo ({duration:.1f}s). Por favor, usa un video de máximo {max_duration} segundos.", None
         
         # Configurar escritor de video con codecs compatibles (orden de preferencia)
         temp_output_path = os.path.join(tempfile.gettempdir(), f"video_clasificado_{os.getpid()}.mp4")
@@ -316,7 +316,7 @@ def classify_video(video_path, progress=gr.Progress()):
                     out.release()
                     out = None
             except Exception as e:
-                print(f"⚠️ No se pudo usar codec {codec_desc}: {e}")
+                print(f"ADVERTENCIA: No se pudo usar codec {codec_desc}: {e}")
                 continue
         
         if out is None or not out.isOpened():
@@ -533,63 +533,63 @@ def classify_video(video_path, progress=gr.Progress()):
             return "Error: El video procesado no se generó correctamente", None
         
         # Generar reporte
-        report = "📊 ANÁLISIS DE CLASIFICACIÓN DE VIDEO\n"
+        report = "ANALISIS DE CLASIFICACION DE VIDEO\n"
         report += f"{'='*70}\n\n"
-        report += f"📹 Información del video:\n"
-        report += f"   • Duración: {duration:.2f} segundos\n"
-        report += f"   • FPS: {fps}\n"
-        report += f"   • Total de frames: {total_frames}\n"
-        report += f"   • Frames procesados (1 por segundo): {processed_frames}\n"
-        report += f"   • Resolución: {frame_width}x{frame_height}\n\n"
+        report += f"Informacion del video:\n"
+        report += f"   - Duracion: {duration:.2f} segundos\n"
+        report += f"   - FPS: {fps}\n"
+        report += f"   - Total de frames: {total_frames}\n"
+        report += f"   - Frames procesados (1 por segundo): {processed_frames}\n"
+        report += f"   - Resolucion: {frame_width}x{frame_height}\n\n"
         
-        report += f"⚙️ Configuración de procesamiento:\n"
-        report += f"   • Umbral de confianza mínima: 40%\n"
-        report += f"   • Duración de visualización: 1 segundo por detección\n"
-        report += f"   • Buffer de suavizado: 3 frames (mayoría simple)\n"
-        report += f"   • Actualización: Cambios detectados o confianza >60%\n\n"
+        report += f"Configuracion de procesamiento:\n"
+        report += f"   - Umbral de confianza minima: 40%\n"
+        report += f"   - Duracion de visualizacion: 1 segundo por deteccion\n"
+        report += f"   - Buffer de suavizado: 3 frames (mayoria simple)\n"
+        report += f"   - Actualizacion: Cambios detectados o confianza >60%\n\n"
         
         # Análisis MobileNetV2
         if detections_mobilenet:
             report += f"{'='*70}\n"
-            report += f"🤖 RESULTADOS - MobileNetV2\n"
+            report += f"RESULTADOS - MobileNetV2\n"
             report += f"{'='*70}\n"
             gatos_mb = sum(1 for d in detections_mobilenet if d["clase"] == "Gato")
             perros_mb = sum(1 for d in detections_mobilenet if d["clase"] == "Perro")
-            report += f"   • Gatos detectados: {gatos_mb}\n"
-            report += f"   • Perros detectados: {perros_mb}\n"
-            report += f"   • Total detecciones: {len(detections_mobilenet)}\n\n"
+            report += f"   - Gatos detectados: {gatos_mb}\n"
+            report += f"   - Perros detectados: {perros_mb}\n"
+            report += f"   - Total detecciones: {len(detections_mobilenet)}\n\n"
             report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
             report += f"{'-'*50}\n"
             for det in detections_mobilenet:
                 report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
         else:
             report += f"{'='*70}\n"
-            report += f"🤖 RESULTADOS - MobileNetV2\n"
+            report += f"RESULTADOS - MobileNetV2\n"
             report += f"{'='*70}\n"
-            report += f"   ⚠️ No se realizaron detecciones con confianza > 40%\n\n"
+            report += f"   ADVERTENCIA: No se realizaron detecciones con confianza > 40%\n\n"
         
         # Análisis ResNet50
         if detections_resnet:
-            report += f"\n{'='*70}\n"
-            report += f"🤖 RESULTADOS - ResNet50\n"
+            report += f"{'='*70}\n"
+            report += f"RESULTADOS - ResNet50\n"
             report += f"{'='*70}\n"
             gatos_rn = sum(1 for d in detections_resnet if d["clase"] == "Gato")
             perros_rn = sum(1 for d in detections_resnet if d["clase"] == "Perro")
-            report += f"   • Gatos detectados: {gatos_rn}\n"
-            report += f"   • Perros detectados: {perros_rn}\n"
-            report += f"   • Total detecciones: {len(detections_resnet)}\n\n"
+            report += f"   - Gatos detectados: {gatos_rn}\n"
+            report += f"   - Perros detectados: {perros_rn}\n"
+            report += f"   - Total detecciones: {len(detections_resnet)}\n\n"
             report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
             report += f"{'-'*50}\n"
             for det in detections_resnet:
                 report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
         else:
             report += f"\n{'='*70}\n"
-            report += f"🤖 RESULTADOS - ResNet50\n"
+            report += f"RESULTADOS - ResNet50\n"
             report += f"{'='*70}\n"
-            report += f"   ⚠️ No se realizaron detecciones con confianza > 40%\n\n"
+            report += f"   ADVERTENCIA: No se realizaron detecciones con confianza > 40%\n\n"
         
         report += f"\n{'='*70}\n"
-        report += f"✅ Video procesado y guardado con anotaciones\n"
+        report += f"Video procesado y guardado con anotaciones\n"
         report += f"{'='*70}\n"
         
         return report, temp_output_path
@@ -767,8 +767,8 @@ with gr.Blocks(title="Clasificador y Transcriptor") as app:
                 5. Se proporciona un análisis detallado de todas las detecciones
                 
                 **Leyenda de colores:**
-                - 🟢 Verde: Gato detectado
-                - 🔵 Azul: Perro detectado
+                - Verde: Gato detectado
+                - Azul: Perro detectado
                 
                 **Límites:**
                 - Duración máxima: 2 minutos
@@ -844,7 +844,7 @@ if __name__ == "__main__":
     
     # Verificar que estamos usando la política correcta de event loop
     if sys.platform == 'win32':
-        print("✓ Usando WindowsSelectorEventLoopPolicy para evitar errores de conexión")
+        print("Usando WindowsSelectorEventLoopPolicy para evitar errores de conexión")
     
     try:
         app.launch(
@@ -856,7 +856,7 @@ if __name__ == "__main__":
             show_error=True
         )
     except Exception as e:
-        print(f"\n❌ Error al iniciar la aplicación: {e}")
+        print(f"\nError al iniciar la aplicación: {e}")
         print("\nIntentando con configuración alternativa...")
         app.launch(
             server_name="0.0.0.0",
