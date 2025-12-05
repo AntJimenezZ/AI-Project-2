@@ -378,10 +378,10 @@ if __name__ == "__main__":
     print("Iniciando la aplicación...")
     print("="*50 + "\n")
     
-    # Lanzar con share=True para obtener un link público (opcional)
+
     app.launch(
         server_name="127.0.0.1",
         server_port=7860,
-        share=False,  # Cambiar a True si quieres un link público
-        inbrowser=True  # Abre automáticamente en el navegador
+        share=False,
+        inbrowser=True 
     )
