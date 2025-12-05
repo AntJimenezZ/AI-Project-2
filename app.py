@@ -3,6 +3,16 @@ Interfaz web para clasificación de imágenes y reconocimiento de voz
 Usa Gradio para crear una interfaz sencilla con dos pestañas
 """
 
+# Solución para el error de ConnectionResetError en Windows
+import sys
+if sys.platform == 'win32':
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    # Suprimir el error cosmético de ConnectionResetError
+    import logging
+    logging.getLogger('asyncio').setLevel(logging.CRITICAL)
+
 import gradio as gr
 import tensorflow as tf
 import numpy as np
@@ -11,6 +21,10 @@ from PIL import Image
 import os
 import cv2
 import tempfile
+import warnings
+
+# Suprimir warnings de conversión de video
+warnings.filterwarnings('ignore', category=UserWarning, module='gradio.components.video')
 
 # ============================================
 # CONFIGURACIÓN DE RUTAS
@@ -207,7 +221,37 @@ def classify_image(image):
         return f"Error al procesar la imagen: {str(e)}", None, None
 
 
-def classify_video(video_path):
+def convert_video_format(input_path, output_path):
+    """
+    Convierte un video a formato compatible usando ffmpeg si está disponible.
+    Si no, usa solo OpenCV.
+    """
+    try:
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            return False
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
+        
+        cap.release()
+        out.release()
+        return True
+    except:
+        return False
+
+
+def classify_video(video_path, progress=gr.Progress()):
     """
     Procesa un video extrayendo 1 frame por segundo y clasificando cada uno con ambos modelos.
     Utiliza suavizado de predicciones para mayor estabilidad.
@@ -215,11 +259,15 @@ def classify_video(video_path):
     
     Args:
         video_path: ruta al archivo de video
+        progress: barra de progreso de Gradio
     Returns:
         tupla con (reporte_texto, video_anotado)
     """
     if video_path is None:
         return "Por favor, sube un video", None
+    
+    cap = None
+    out = None
     
     try:
         # Abrir el video
@@ -239,10 +287,42 @@ def classify_video(video_path):
         
         duration = total_frames / fps if fps > 0 else 0
         
-        # Configurar escritor de video de salida
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        temp_output_path = os.path.join(tempfile.gettempdir(), "video_clasificado.mp4")
-        out = cv2.VideoWriter(temp_output_path, fourcc, fps, (frame_width, frame_height))
+        # Limitar la duración del video a 2 minutos para evitar problemas de memoria
+        max_duration = 120  # 2 minutos
+        if duration > max_duration:
+            if cap is not None:
+                cap.release()
+            return f"⚠️ Video demasiado largo ({duration:.1f}s). Por favor, usa un video de máximo {max_duration} segundos.", None
+        
+        # Configurar escritor de video con codecs compatibles (orden de preferencia)
+        temp_output_path = os.path.join(tempfile.gettempdir(), f"video_clasificado_{os.getpid()}.mp4")
+        
+        # Intentar con diferentes codecs en orden de compatibilidad
+        codecs_to_try = [
+            ('mp4v', 'MP4V'),  # MPEG-4 - más compatible
+            ('XVID', 'XVID'),  # Xvid - muy compatible
+            ('MJPG', 'MJPEG'), # Motion JPEG - siempre disponible
+        ]
+        
+        out = None
+        for codec_name, codec_desc in codecs_to_try:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec_name)
+                out = cv2.VideoWriter(temp_output_path, fourcc, fps, (frame_width, frame_height))
+                if out.isOpened():
+                    print(f"✓ Usando codec {codec_desc} para el video de salida")
+                    break
+                else:
+                    out.release()
+                    out = None
+            except Exception as e:
+                print(f"⚠️ No se pudo usar codec {codec_desc}: {e}")
+                continue
+        
+        if out is None or not out.isOpened():
+            if cap is not None:
+                cap.release()
+            return "Error: No se pudo crear el video de salida con ningún codec disponible. OpenCV puede no estar configurado correctamente.", None
         
         # Variables para análisis
         detections_mobilenet = []
@@ -250,14 +330,19 @@ def classify_video(video_path):
         frame_count = 0
         processed_frames = 0
         
-        # Variables para suavizado de predicciones
+        # Variables para detección con mejor respuesta a cambios
         last_mobilenet_class = None
         last_mobilenet_conf = 0
         last_resnet_class = None
         last_resnet_conf = 0
         frames_since_update_mb = 0
         frames_since_update_rn = 0
-        max_frames_display = fps * 2  # Mostrar predicción durante 2 segundos
+        max_frames_display = fps * 1  # Mostrar predicción durante 1 segundo
+        
+        # Buffer para detección de cambios (últimas 3 predicciones)
+        mobilenet_buffer = []
+        resnet_buffer = []
+        buffer_size = 3
         
         # Procesar frames
         while True:
@@ -266,6 +351,10 @@ def classify_video(video_path):
                 break
             
             frame_count += 1
+            
+            # Actualizar progreso
+            if frame_count % (fps * 5) == 0:  # Actualizar cada 5 segundos
+                progress(frame_count / total_frames, desc=f"Procesando: {frame_count}/{total_frames} frames")
             
             # Extraer 1 frame por segundo (cada fps frames)
             if frame_count % fps == 0 or frame_count == 1:
@@ -286,18 +375,47 @@ def classify_video(video_path):
                         confidence = float(pred[0][pred_class]) * 100
                         mobilenet_class = CLASS_NAMES[pred_class]
                         
-                        # Solo actualizar si la confianza es suficientemente alta (>50%)
-                        if confidence > 50:
-                            last_mobilenet_class = mobilenet_class
-                            last_mobilenet_conf = confidence
-                            frames_since_update_mb = 0
-                            
-                            detections_mobilenet.append({
-                                "frame": processed_frames,
-                                "segundo": frame_count / fps,
+                        # Agregar al buffer solo si la confianza es aceptable (>40%)
+                        if confidence > 40:
+                            mobilenet_buffer.append({
                                 "clase": mobilenet_class,
-                                "confianza": f"{confidence:.2f}%"
+                                "confianza": confidence
                             })
+                            
+                            # Mantener solo las últimas N predicciones
+                            if len(mobilenet_buffer) > buffer_size:
+                                mobilenet_buffer.pop(0)
+                            
+                            # Análisis del buffer para decidir la clase
+                            if len(mobilenet_buffer) >= 2:  # Al menos 2 predicciones
+                                # Contar clases en el buffer
+                                gatos = sum(1 for p in mobilenet_buffer if p["clase"] == "Gato")
+                                perros = sum(1 for p in mobilenet_buffer if p["clase"] == "Perro")
+                                
+                                # Decisión por mayoría simple
+                                if gatos > perros:
+                                    chosen_class = "Gato"
+                                    avg_conf = sum(p["confianza"] for p in mobilenet_buffer if p["clase"] == "Gato") / gatos
+                                elif perros > gatos:
+                                    chosen_class = "Perro"
+                                    avg_conf = sum(p["confianza"] for p in mobilenet_buffer if p["clase"] == "Perro") / perros
+                                else:
+                                    # Empate: usar la más reciente con mayor confianza
+                                    chosen_class = mobilenet_buffer[-1]["clase"]
+                                    avg_conf = mobilenet_buffer[-1]["confianza"]
+                                
+                                # Actualizar solo si hay un cambio significativo O suficiente confianza
+                                if chosen_class != last_mobilenet_class or avg_conf > 60:
+                                    last_mobilenet_class = chosen_class
+                                    last_mobilenet_conf = avg_conf
+                                    frames_since_update_mb = 0
+                                    
+                                    detections_mobilenet.append({
+                                        "frame": processed_frames,
+                                        "segundo": frame_count / fps,
+                                        "clase": chosen_class,
+                                        "confianza": f"{avg_conf:.2f}%"
+                                    })
                     
                     # Predicción con ResNet50
                     if model_resnet is not None:
@@ -306,18 +424,47 @@ def classify_video(video_path):
                         confidence = float(pred[0][pred_class]) * 100
                         resnet_class = CLASS_NAMES[pred_class]
                         
-                        # Solo actualizar si la confianza es suficientemente alta (>50%)
-                        if confidence > 50:
-                            last_resnet_class = resnet_class
-                            last_resnet_conf = confidence
-                            frames_since_update_rn = 0
-                            
-                            detections_resnet.append({
-                                "frame": processed_frames,
-                                "segundo": frame_count / fps,
+                        # Agregar al buffer solo si la confianza es aceptable (>40%)
+                        if confidence > 40:
+                            resnet_buffer.append({
                                 "clase": resnet_class,
-                                "confianza": f"{confidence:.2f}%"
+                                "confianza": confidence
                             })
+                            
+                            # Mantener solo las últimas N predicciones
+                            if len(resnet_buffer) > buffer_size:
+                                resnet_buffer.pop(0)
+                            
+                            # Análisis del buffer para decidir la clase
+                            if len(resnet_buffer) >= 2:  # Al menos 2 predicciones
+                                # Contar clases en el buffer
+                                gatos = sum(1 for p in resnet_buffer if p["clase"] == "Gato")
+                                perros = sum(1 for p in resnet_buffer if p["clase"] == "Perro")
+                                
+                                # Decisión por mayoría simple
+                                if gatos > perros:
+                                    chosen_class = "Gato"
+                                    avg_conf = sum(p["confianza"] for p in resnet_buffer if p["clase"] == "Gato") / gatos
+                                elif perros > gatos:
+                                    chosen_class = "Perro"
+                                    avg_conf = sum(p["confianza"] for p in resnet_buffer if p["clase"] == "Perro") / perros
+                                else:
+                                    # Empate: usar la más reciente con mayor confianza
+                                    chosen_class = resnet_buffer[-1]["clase"]
+                                    avg_conf = resnet_buffer[-1]["confianza"]
+                                
+                                # Actualizar solo si hay un cambio significativo O suficiente confianza
+                                if chosen_class != last_resnet_class or avg_conf > 60:
+                                    last_resnet_class = chosen_class
+                                    last_resnet_conf = avg_conf
+                                    frames_since_update_rn = 0
+                                    
+                                    detections_resnet.append({
+                                        "frame": processed_frames,
+                                        "segundo": frame_count / fps,
+                                        "clase": chosen_class,
+                                        "confianza": f"{avg_conf:.2f}%"
+                                    })
                 
                 except Exception as e:
                     print(f"Error procesando frame {processed_frames}: {e}")
@@ -375,9 +522,15 @@ def classify_video(video_path):
             # Escribir frame en el video de salida
             out.write(frame)
         
-        # Liberar recursos
-        cap.release()
-        out.release()
+        # Liberar recursos inmediatamente
+        if cap is not None:
+            cap.release()
+        if out is not None:
+            out.release()
+        
+        # Verificar que el archivo se creó correctamente
+        if not os.path.exists(temp_output_path) or os.path.getsize(temp_output_path) == 0:
+            return "Error: El video procesado no se generó correctamente", None
         
         # Generar reporte
         report = "📊 ANÁLISIS DE CLASIFICACIÓN DE VIDEO\n"
@@ -390,9 +543,10 @@ def classify_video(video_path):
         report += f"   • Resolución: {frame_width}x{frame_height}\n\n"
         
         report += f"⚙️ Configuración de procesamiento:\n"
-        report += f"   • Umbral de confianza mínima: 50%\n"
-        report += f"   • Duración de visualización: 2 segundos por detección\n"
-        report += f"   • Suavizado: Activado\n\n"
+        report += f"   • Umbral de confianza mínima: 40%\n"
+        report += f"   • Duración de visualización: 1 segundo por detección\n"
+        report += f"   • Buffer de suavizado: 3 frames (mayoría simple)\n"
+        report += f"   • Actualización: Cambios detectados o confianza >60%\n\n"
         
         # Análisis MobileNetV2
         if detections_mobilenet:
@@ -412,7 +566,7 @@ def classify_video(video_path):
             report += f"{'='*70}\n"
             report += f"🤖 RESULTADOS - MobileNetV2\n"
             report += f"{'='*70}\n"
-            report += f"   ⚠️ No se realizaron detecciones con confianza > 50%\n\n"
+            report += f"   ⚠️ No se realizaron detecciones con confianza > 40%\n\n"
         
         # Análisis ResNet50
         if detections_resnet:
@@ -432,7 +586,7 @@ def classify_video(video_path):
             report += f"\n{'='*70}\n"
             report += f"🤖 RESULTADOS - ResNet50\n"
             report += f"{'='*70}\n"
-            report += f"   ⚠️ No se realizaron detecciones con confianza > 50%\n\n"
+            report += f"   ⚠️ No se realizaron detecciones con confianza > 40%\n\n"
         
         report += f"\n{'='*70}\n"
         report += f"✅ Video procesado y guardado con anotaciones\n"
@@ -441,7 +595,19 @@ def classify_video(video_path):
         return report, temp_output_path
         
     except Exception as e:
-        return f"Error al procesar el video: {str(e)}", None
+        # Asegurar liberación de recursos en caso de error
+        if cap is not None:
+            try:
+                cap.release()
+            except:
+                pass
+        if out is not None:
+            try:
+                out.release()
+            except:
+                pass
+        
+        return f"Error al procesar el video: {str(e)}\n\nSugerencias:\n- Verifica que el video no esté corrupto\n- Intenta con un video más corto (<2 minutos)\n- Asegúrate de que el formato sea compatible (MP4, AVI, MOV)", None
 
 
 
@@ -594,15 +760,19 @@ with gr.Blocks(title="Clasificador y Transcriptor") as app:
             gr.Markdown(
                 """
                 **Cómo funciona:**
-                1. Sube un archivo de video en formato MP4
+                1. Sube un archivo de video en formato MP4 (máximo 2 minutos)
                 2. El sistema extrae 1 frame por segundo
-                3. Cada frame se clasifica usando MobileNetV2
+                3. Cada frame se clasifica usando ambos modelos
                 4. Se genera un video con anotaciones mostrando la clase detectada y confianza
                 5. Se proporciona un análisis detallado de todas las detecciones
                 
                 **Leyenda de colores:**
                 - 🟢 Verde: Gato detectado
                 - 🔵 Azul: Perro detectado
+                
+                **Límites:**
+                - Duración máxima: 2 minutos
+                - Formatos soportados: MP4, AVI, MOV
                 """
             )
             
@@ -672,10 +842,25 @@ if __name__ == "__main__":
     print("Iniciando la aplicación...")
     print("="*50 + "\n")
     
-
-    app.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        share=False,
-        inbrowser=True 
-    )
+    # Verificar que estamos usando la política correcta de event loop
+    if sys.platform == 'win32':
+        print("✓ Usando WindowsSelectorEventLoopPolicy para evitar errores de conexión")
+    
+    try:
+        app.launch(
+            server_name="127.0.0.1",
+            server_port=7860,
+            share=False,
+            inbrowser=True,
+            quiet=False,
+            show_error=True
+        )
+    except Exception as e:
+        print(f"\n❌ Error al iniciar la aplicación: {e}")
+        print("\nIntentando con configuración alternativa...")
+        app.launch(
+            server_name="0.0.0.0",
+            server_port=7860,
+            share=False,
+            inbrowser=False
+        )
