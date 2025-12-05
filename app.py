@@ -209,7 +209,7 @@ def classify_image(image):
 
 def classify_video(video_path):
     """
-    Procesa un video extrayendo 1 frame por segundo y clasificando cada uno.
+    Procesa un video extrayendo 1 frame por segundo y clasificando cada uno con ambos modelos.
     Retorna un análisis con detecciones por modelo y un video con anotaciones.
     
     Args:
@@ -244,7 +244,8 @@ def classify_video(video_path):
         out = cv2.VideoWriter(temp_output_path, fourcc, fps, (frame_width, frame_height))
         
         # Variables para análisis
-        detections = []
+        detections_mobilenet = []
+        detections_resnet = []
         frame_count = 0
         processed_frames = 0
         
@@ -264,33 +265,64 @@ def classify_video(video_path):
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_image = Image.fromarray(frame_rgb)
                 
-                # Clasificar la imagen
+                # Clasificar la imagen con ambos modelos
                 try:
                     img_array = preprocess_image(pil_image)
                     
-                    # Predicción con MobileNetV2 (más confiable)
+                    # Predicción con MobileNetV2
+                    mobilenet_class = None
+                    mobilenet_conf = 0
                     if model_mobilenet is not None:
                         pred = model_mobilenet.predict(img_array, verbose=0)
                         pred_class = np.argmax(pred[0])
                         confidence = float(pred[0][pred_class]) * 100
-                        class_name = CLASS_NAMES[pred_class]
+                        mobilenet_class = CLASS_NAMES[pred_class]
+                        mobilenet_conf = confidence
                         
-                        detections.append({
+                        detections_mobilenet.append({
                             "frame": processed_frames,
                             "segundo": frame_count / fps,
-                            "clase": class_name,
+                            "clase": mobilenet_class,
                             "confianza": f"{confidence:.2f}%"
                         })
+                    
+                    # Predicción con ResNet50
+                    resnet_class = None
+                    resnet_conf = 0
+                    if model_resnet is not None:
+                        pred = model_resnet.predict(img_array, verbose=0)
+                        pred_class = np.argmax(pred[0])
+                        confidence = float(pred[0][pred_class]) * 100
+                        resnet_class = CLASS_NAMES[pred_class]
+                        resnet_conf = confidence
                         
-                        # Anotaciones en el video
-                        color = (0, 255, 0) if class_name == "Gato" else (255, 0, 0)  # Verde para gato, azul para perro
-                        label = f"{class_name}: {confidence:.1f}%"
-                        
-                        # Agregar texto al frame
-                        cv2.putText(frame, label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 
-                                  1, color, 2, cv2.LINE_AA)
-                        cv2.putText(frame, f"Tiempo: {frame_count/fps:.1f}s", (20, 80), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                        detections_resnet.append({
+                            "frame": processed_frames,
+                            "segundo": frame_count / fps,
+                            "clase": resnet_class,
+                            "confianza": f"{confidence:.2f}%"
+                        })
+                    
+                    # Anotaciones en el video (mostrar ambos modelos)
+                    y_offset = 40
+                    
+                    if model_mobilenet is not None and mobilenet_class:
+                        color_mb = (0, 255, 0) if mobilenet_class == "Gato" else (255, 0, 0)
+                        label_mb = f"MobileNet: {mobilenet_class} ({mobilenet_conf:.1f}%)"
+                        cv2.putText(frame, label_mb, (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 
+                                  0.8, color_mb, 2, cv2.LINE_AA)
+                        y_offset += 35
+                    
+                    if model_resnet is not None and resnet_class:
+                        color_rn = (0, 255, 0) if resnet_class == "Gato" else (255, 0, 0)
+                        label_rn = f"ResNet50: {resnet_class} ({resnet_conf:.1f}%)"
+                        cv2.putText(frame, label_rn, (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 
+                                  0.8, color_rn, 2, cv2.LINE_AA)
+                        y_offset += 35
+                    
+                    # Mostrar tiempo
+                    cv2.putText(frame, f"Tiempo: {frame_count/fps:.1f}s", (20, y_offset), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
                 
                 except Exception as e:
                     print(f"Error procesando frame {processed_frames}: {e}")
@@ -304,7 +336,7 @@ def classify_video(video_path):
         
         # Generar reporte
         report = "📊 ANÁLISIS DE CLASIFICACIÓN DE VIDEO\n"
-        report += f"{'='*50}\n\n"
+        report += f"{'='*70}\n\n"
         report += f"📹 Información del video:\n"
         report += f"   • Duración: {duration:.2f} segundos\n"
         report += f"   • FPS: {fps}\n"
@@ -312,23 +344,37 @@ def classify_video(video_path):
         report += f"   • Frames procesados: {processed_frames}\n"
         report += f"   • Resolución: {frame_width}x{frame_height}\n\n"
         
-        # Contar detecciones
-        gatos = sum(1 for d in detections if d["clase"] == "Gato")
-        perros = sum(1 for d in detections if d["clase"] == "Perro")
+        # Análisis MobileNetV2
+        if detections_mobilenet:
+            report += f"{'='*70}\n"
+            report += f"🤖 RESULTADOS - MobileNetV2\n"
+            report += f"{'='*70}\n"
+            gatos_mb = sum(1 for d in detections_mobilenet if d["clase"] == "Gato")
+            perros_mb = sum(1 for d in detections_mobilenet if d["clase"] == "Perro")
+            report += f"   • Gatos detectados: {gatos_mb}\n"
+            report += f"   • Perros detectados: {perros_mb}\n\n"
+            report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
+            report += f"{'-'*50}\n"
+            for det in detections_mobilenet:
+                report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
         
-        report += f"🐱 Detecciones:\n"
-        report += f"   • Gatos detectados: {gatos}\n"
-        report += f"   • Perros detectados: {perros}\n\n"
+        # Análisis ResNet50
+        if detections_resnet:
+            report += f"\n{'='*70}\n"
+            report += f"🤖 RESULTADOS - ResNet50\n"
+            report += f"{'='*70}\n"
+            gatos_rn = sum(1 for d in detections_resnet if d["clase"] == "Gato")
+            perros_rn = sum(1 for d in detections_resnet if d["clase"] == "Perro")
+            report += f"   • Gatos detectados: {gatos_rn}\n"
+            report += f"   • Perros detectados: {perros_rn}\n\n"
+            report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
+            report += f"{'-'*50}\n"
+            for det in detections_resnet:
+                report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
         
-        report += f"📋 Detalles por frame:\n"
-        report += f"{'Frame':<8} {'Segundo':<10} {'Clase':<10} {'Confianza':<12}\n"
-        report += f"{'-'*50}\n"
-        
-        for det in detections:
-            report += f"{det['frame']:<8} {det['segundo']:<10.2f} {det['clase']:<10} {det['confianza']:<12}\n"
-        
-        report += f"\n{'='*50}\n"
-        report += f"✅ Video procesado y guardado con anotaciones"
+        report += f"\n{'='*70}\n"
+        report += f"✅ Video procesado y guardado con anotaciones\n"
+        report += f"{'='*70}\n"
         
         return report, temp_output_path
         
